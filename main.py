@@ -1,5 +1,8 @@
-from astrbot.api import AstrBotConfig
-from astrbot.api.event import AstrMessageEvent, filter
+import asyncio
+
+from astrbot.api import AstrBotConfig, logger
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api.message_components import Image
 from astrbot.api.star import Context, Star
 
 from .extend.castle_swap import CastleSwapService
@@ -10,6 +13,7 @@ from .extend.group_management import (
     refresh_group_name_at_midnight,
 )
 from .extend.kotlin_celebration import handle_kotlin_celebration
+from .extend.text_to_image import TextToImageGenerator
 
 
 DAILY_GROUP_NAME_JOB = "misaka_bot_daily_group_name"
@@ -65,6 +69,35 @@ class MisakaBotPlugin(Star):
             self.config,
         ):
             yield result
+
+    @filter.llm_tool(name="misaka_generate_image")
+    async def generate_image(self, event: AstrMessageEvent, prompt: str) -> str:
+        """使用御坂的图片服务生成一张 1024x1024 图片并直接发送给用户。
+
+        仅当用户明确要求生成、绘制或创作图片时调用。不要把图片链接、Base64 数据或生成结果文字当作图片发送给用户。
+
+        Args:
+            prompt(string): 用于生成图片的完整中文或英文描述，需包含主体、场景、风格和用户提出的其他要求。
+        """
+        try:
+            result = await TextToImageGenerator.from_config(
+                self.context,
+                self.config,
+            ).generate(
+                prompt,
+                size="1024x1024",
+            )
+            if result.source.startswith("base64://"):
+                image = Image.fromBase64(result.source.removeprefix("base64://"))
+            else:
+                image = Image.fromURL(result.source)
+            await event.send(MessageChain([image]))
+            return "图片已生成并发送给用户。"
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"图片生成 Tool 调用失败: {exc}")
+            return "图片生成失败，请检查文生图 AI 服务商配置后重试。"
 
     @filter.command("群规")
     async def send_group_rules(self, event: AstrMessageEvent):
