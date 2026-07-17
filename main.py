@@ -11,6 +11,7 @@ from .extend.group_management import (
 )
 from .extend.image_generation import ImageGenerationService
 from .extend.kotlin_celebration import handle_kotlin_celebration
+from .extend.markdown_to_image import handle_render_markdown
 
 
 DAILY_GROUP_NAME_JOB = "misaka_bot_daily_group_name"
@@ -75,6 +76,21 @@ class MisakaBotPlugin(Star):
             prompt(string): 用于生成图片的完整中文或英文描述，需包含主体、场景、风格和用户提出的其他要求。
         """
         return await self._image_generation_service.handle(event, prompt)
+
+    @filter.llm_tool(name="misaka_render_markdown_to_image")
+    async def render_markdown_to_image(
+        self,
+        event: AstrMessageEvent,
+        markdown_content: str,
+    ) -> str:
+        """将最终 Markdown 回复渲染为图片并直接发送。
+
+        当回答必须使用 Markdown 才能正确表达时必须调用，例如表格、分级标题、列表、引用或代码块。传入完整的最终 Markdown 原文；工具会发送图片，因此调用后不要再输出原始 Markdown 或重复内容。普通的一两句纯文本回复不要调用此工具。
+
+        Args:
+            markdown_content(string): 要发送给用户的完整 Markdown 内容，保留标题、表格、列表、代码块等 Markdown 结构。
+        """
+        return await handle_render_markdown(event, markdown_content)
 
     @filter.command("群规")
     async def send_group_rules(self, event: AstrMessageEvent):
