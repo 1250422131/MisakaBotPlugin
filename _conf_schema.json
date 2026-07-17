@@ -7,7 +7,7 @@
     "default": ""
   },
   "special_group_avatar_enabled": {
-    "type": "boolean",
+    "type": "bool",
     "description": "特殊节日和节气自动更换群头像",
     "hint": "开启后，执行改朝换代或每日零点更新时，会在节日、节气生成对应主题的 22、33 娘群头像，并在特殊日期结束后的次日恢复日常头像。",
     "default": true
