@@ -1,8 +1,5 @@
-import asyncio
-
-from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import AstrMessageEvent, MessageChain, filter
-from astrbot.api.message_components import Image, Plain
+from astrbot.api import AstrBotConfig
+from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 
 from .extend.castle_swap import CastleSwapService
@@ -12,8 +9,8 @@ from .extend.group_management import (
     handle_send_group_rules,
     refresh_group_name_at_midnight,
 )
+from .extend.image_generation import ImageGenerationService
 from .extend.kotlin_celebration import handle_kotlin_celebration
-from .extend.text_to_image import TextToImageGenerator
 
 
 DAILY_GROUP_NAME_JOB = "misaka_bot_daily_group_name"
@@ -25,7 +22,7 @@ class MisakaBotPlugin(Star):
         self.config = config
         self._group_name_job_id: str | None = None
         self._castle_swap_service = CastleSwapService()
-        self._image_generation_tasks: set[asyncio.Task] = set()
+        self._image_generation_service = ImageGenerationService(self.context, config)
 
     async def initialize(self):
         """注册每日零点更新群名的任务。"""
@@ -48,12 +45,7 @@ class MisakaBotPlugin(Star):
         if self._group_name_job_id:
             await self.context.cron_manager.delete_job(self._group_name_job_id)
             self._group_name_job_id = None
-        tasks = list(self._image_generation_tasks)
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        self._image_generation_tasks.clear()
+        await self._image_generation_service.terminate()
 
     async def _refresh_group_name_at_midnight(self):
         await refresh_group_name_at_midnight(self.context)
@@ -81,53 +73,12 @@ class MisakaBotPlugin(Star):
     async def generate_image(self, event: AstrMessageEvent, prompt: str) -> str:
         """使用御坂的图片服务生成图片并直接发送给用户。
 
-        仅当用户明确要求生成、绘制或创作图片时调用。不要把图片链接、Base64 数据或生成结果文字当作图片发送给用户。
+        仅当用户明确要求生成、绘制或创作图片时调用。用户附带或回复的图片会自动作为参考图进行图生图；没有图片时使用纯文生图。不要把图片链接、Base64 数据或生成结果文字当作图片发送给用户。
 
         Args:
             prompt(string): 用于生成图片的完整中文或英文描述，需包含主体、场景、风格和用户提出的其他要求。
         """
-        try:
-            await event.send(MessageChain([Plain("正在努力绘制...")]))
-            task = asyncio.create_task(
-                self._generate_image_in_background(event, prompt)
-            )
-            self._image_generation_tasks.add(task)
-            task.add_done_callback(self._image_generation_tasks.discard)
-            event.stop_event()
-            return "图片正在生成，完成后会自动发送给用户。"
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning(f"图片生成 Tool 调用失败: {exc}")
-            return "图片生成失败，请检查文生图 AI 服务商配置后重试。"
-
-    async def _generate_image_in_background(
-        self,
-        event: AstrMessageEvent,
-        prompt: str,
-    ) -> None:
-        try:
-            result = await TextToImageGenerator.from_config(
-                self.context,
-                self.config,
-            ).generate(
-                prompt,
-            )
-            if result.source.startswith("base64://"):
-                image = Image.fromBase64(result.source.removeprefix("base64://"))
-            else:
-                image = Image.fromURL(result.source)
-            await event.send(MessageChain([image]))
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning(f"后台图片生成失败: {exc}")
-            try:
-                await event.send(
-                    MessageChain([Plain("图片生成失败，请检查文生图 AI 服务商后重试。")])
-                )
-            except Exception as send_exc:
-                logger.warning(f"后台图片生成失败消息发送失败: {send_exc}")
+        return await self._image_generation_service.handle(event, prompt)
 
     @filter.command("群规")
     async def send_group_rules(self, event: AstrMessageEvent):
