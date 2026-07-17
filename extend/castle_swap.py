@@ -44,7 +44,6 @@ class CastleSwapService:
                 progress_text="正在融合两张图片，请稍候...",
                 reply_id=event.message_obj.message_id,
                 on_complete=lambda: self._release_user(user_id),
-                stop_event=False,
             )
             if result != "图片正在生成，完成后会自动发送给用户。":
                 yield event.plain_result(result)

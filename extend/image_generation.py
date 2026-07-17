@@ -33,7 +33,6 @@ class ImageGenerationService:
         progress_text: str = "正在努力绘制...",
         reply_id: str | int | None = None,
         on_complete: Callable[[], Awaitable[None]] | None = None,
-        stop_event: bool = True,
     ) -> str:
         """启动图片生成任务，参考图只来自当前消息和当前回复链。"""
         try:
@@ -50,8 +49,7 @@ class ImageGenerationService:
             )
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
-            if stop_event:
-                event.stop_event()
+            event.stop_event()
             return "图片正在生成，完成后会自动发送给用户。"
         except asyncio.CancelledError:
             raise
