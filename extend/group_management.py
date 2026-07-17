@@ -26,8 +26,12 @@ async def handle_refresh_group_name(event: AstrMessageEvent):
         yield event.plain_result("该指令只能在本群使用。")
         return
 
+    event_self_id = getattr(event.message_obj, "self_id", None)
     try:
-        group_name = await set_group_name(event.bot)
+        group_name = await set_group_name(
+            event.bot,
+            self_id=str(event_self_id) if event_self_id else None,
+        )
     except Exception as exc:
         logger.exception(f"手动更新群名失败: {exc}")
         yield event.plain_result("群名更新失败，请确认机器人具备群管理权限。")
@@ -57,12 +61,42 @@ async def handle_new_member_notice(event: AstrMessageEvent):
     )
 
 
-async def set_group_name(bot: Any) -> str:
+async def set_group_name(bot: Any, self_id: str | None = None) -> str:
     group_name = build_group_name()
-    await bot.call_action(
-        "set_group_name",
-        group_id=TARGET_GROUP_ID,
-        group_name=group_name,
+    connected_clients = getattr(bot, "_wsr_api_clients", {})
+    connected_self_ids = (
+        tuple(str(client_self_id) for client_self_id in connected_clients)
+        if isinstance(connected_clients, dict)
+        else ()
     )
-    logger.info(f"已更新群 {TARGET_GROUP_ID} 名称为：{group_name}")
-    return group_name
+    candidate_self_ids: tuple[str | None, ...] = (
+        (self_id,) if self_id else connected_self_ids or (None,)
+    )
+    last_error: Exception | None = None
+
+    for candidate_self_id in candidate_self_ids:
+        params = {
+            "group_id": TARGET_GROUP_ID,
+            "group_name": group_name,
+        }
+        if candidate_self_id:
+            params["self_id"] = candidate_self_id
+
+        try:
+            await bot.call_action("set_group_name", **params)
+        except Exception as exc:
+            last_error = exc
+            logger.debug(
+                f"机器人 {candidate_self_id or '未指定'} 更新群名失败: {exc}"
+            )
+            continue
+
+        logger.info(
+            f"机器人 {candidate_self_id or '自动选择'} 已更新群 "
+            f"{TARGET_GROUP_ID} 名称为：{group_name}"
+        )
+        return group_name
+
+    raise RuntimeError(
+        f"没有已连接且可管理群 {TARGET_GROUP_ID} 的 OneBot 机器人"
+    ) from last_error
