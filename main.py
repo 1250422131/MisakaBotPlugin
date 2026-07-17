@@ -79,7 +79,7 @@ class MisakaBotPlugin(Star):
 
     @filter.llm_tool(name="misaka_generate_image")
     async def generate_image(self, event: AstrMessageEvent, prompt: str) -> str:
-        """使用御坂的图片服务生成一张 1024x1024 图片并直接发送给用户。
+        """使用御坂的图片服务生成图片并直接发送给用户。
 
         仅当用户明确要求生成、绘制或创作图片时调用。不要把图片链接、Base64 数据或生成结果文字当作图片发送给用户。
 
@@ -93,6 +93,7 @@ class MisakaBotPlugin(Star):
             )
             self._image_generation_tasks.add(task)
             task.add_done_callback(self._image_generation_tasks.discard)
+            event.stop_event()
             return "图片正在生成，完成后会自动发送给用户。"
         except asyncio.CancelledError:
             raise
@@ -111,7 +112,6 @@ class MisakaBotPlugin(Star):
                 self.config,
             ).generate(
                 prompt,
-                size="1024x1024",
             )
             if result.source.startswith("base64://"):
                 image = Image.fromBase64(result.source.removeprefix("base64://"))

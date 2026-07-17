@@ -14,7 +14,6 @@ from astrbot.api.star import Context
 
 
 TEXT_TO_IMAGE_PROVIDER_ID_KEY = "text_to_image_provider_id"
-DEFAULT_SIZE = "1024x1024"
 DEFAULT_QUALITY = "high"
 DEFAULT_OUTPUT_FORMAT = "png"
 IMAGE_GENERATION_TIMEOUT_SECONDS = 120
@@ -112,7 +111,7 @@ class TextToImageGenerator:
         self,
         prompt: str,
         *,
-        size: str = DEFAULT_SIZE,
+        size: str | None = None,
         quality: str = DEFAULT_QUALITY,
         output_format: str = DEFAULT_OUTPUT_FORMAT,
         count: int = 1,
@@ -129,15 +128,17 @@ class TextToImageGenerator:
         model = self._get_model(provider)
 
         if input_images is None:
-            response = await client.images.generate(
-                model=model,
-                prompt=normalized_prompt,
-                size=size,
-                quality=quality,
-                output_format=output_format,
-                n=count,
-                timeout=IMAGE_GENERATION_TIMEOUT_SECONDS,
-            )
+            request_kwargs: dict[str, Any] = {
+                "model": model,
+                "prompt": normalized_prompt,
+                "quality": quality,
+                "output_format": output_format,
+                "n": count,
+                "timeout": IMAGE_GENERATION_TIMEOUT_SECONDS,
+            }
+            if size:
+                request_kwargs["size"] = size
+            response = await client.images.generate(**request_kwargs)
         else:
             response = await self._generate_from_image(
                 client,
@@ -184,7 +185,7 @@ class TextToImageGenerator:
         client: Any,
         model: str,
         prompt: str,
-        size: str,
+        size: str | None,
         quality: str,
         output_format: str,
         count: int,
@@ -196,16 +197,18 @@ class TextToImageGenerator:
         image_files = [
             (image.filename, image.data, image.content_type) for image in input_images
         ]
-        return await client.images.edit(
-            model=model,
-            prompt=prompt,
-            image=image_files,
-            size=size,
-            quality=quality,
-            output_format=output_format,
-            n=count,
-            timeout=IMAGE_GENERATION_TIMEOUT_SECONDS,
-        )
+        request_kwargs: dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "image": image_files,
+            "quality": quality,
+            "output_format": output_format,
+            "n": count,
+            "timeout": IMAGE_GENERATION_TIMEOUT_SECONDS,
+        }
+        if size:
+            request_kwargs["size"] = size
+        return await client.images.edit(**request_kwargs)
 
     @staticmethod
     def _parse_response(response_data: object) -> GeneratedImage:
