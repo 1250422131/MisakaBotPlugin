@@ -1,33 +1,22 @@
 import asyncio
-from collections.abc import Mapping
 
-import aiohttp
-
-from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
-from astrbot.api.message_components import Image, Plain, Reply
-from astrbot.api.star import Context
+from astrbot.api.message_components import Image
 
-from .text_to_image import (
-    REQUEST_TIMEOUT,
-    TextToImageGenerator,
-    load_input_image,
-    output_size_for_images,
-)
+from .image_generation import ImageGenerationService
 
 
 class CastleSwapService:
     """处理王车易位生成任务，并限制同一用户同时只能执行一次。"""
 
-    def __init__(self):
+    def __init__(self, image_generation_service: ImageGenerationService):
         self._active_user_ids: set[str] = set()
         self._lock = asyncio.Lock()
+        self._image_generation_service = image_generation_service
 
     async def handle(
         self,
         event: AstrMessageEvent,
-        context: Context,
-        config: Mapping[str, object],
     ):
         prompt = """将两张参考图中的主体融合为一个单独主体，统一最终图像的风格、服装、配饰和画面表现。
 最终画面只能出现一个主体，不要并排、拼贴、分屏、镜像、双重主体或多张脸。
@@ -48,50 +37,20 @@ class CastleSwapService:
             return
 
         try:
-            yield event.chain_result(
-                [
-                    Reply(id=event.message_obj.message_id),
-                    Plain("正在融合两张图片，请稍候..."),
-                ]
-            )
-            generator = TextToImageGenerator.from_config(context, config)
-            async with aiohttp.ClientSession(timeout=REQUEST_TIMEOUT) as session:
-                input_images = [
-                    await load_input_image(session, source) for source in image_sources
-                ]
-            result = await generator.generate(
+            result = await self._image_generation_service.handle(
+                event,
                 prompt,
-                size=output_size_for_images(input_images),
-                input_images=input_images,
+                reference_image_sources=image_sources,
+                progress_text="正在融合两张图片，请稍候...",
+                reply_id=event.message_obj.message_id,
+                on_complete=lambda: self._release_user(user_id),
+                stop_event=False,
             )
-            if result.source.startswith("base64://"):
-                raise ValueError("文生图接口未返回可发送的图片 URL")
-            yield event.chain_result(
-                [
-                    Reply(id=event.message_obj.message_id),
-                    Image.fromURL(result.source),
-                ]
-            )
-        except asyncio.TimeoutError:
-            logger.warning("王车易位请求超时")
-            yield event.chain_result(
-                [
-                    Reply(id=event.message_obj.message_id),
-                    Plain("王车易位生成超时，请稍后再试。"),
-                ]
-            )
-            return
-        except (aiohttp.ClientError, ValueError, OSError) as exc:
-            logger.warning(f"王车易位生成失败: {exc}")
-            yield event.chain_result(
-                [
-                    Reply(id=event.message_obj.message_id),
-                    Plain("王车易位生成失败，请检查所选文生图 AI 服务商后重试。"),
-                ]
-            )
-            return
-        finally:
+            if result != "图片正在生成，完成后会自动发送给用户。":
+                yield event.plain_result(result)
+        except Exception:
             await self._release_user(user_id)
+            raise
 
     async def _reserve_user(self, user_id: str) -> bool:
         async with self._lock:

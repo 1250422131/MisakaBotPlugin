@@ -21,8 +21,8 @@ class MisakaBotPlugin(Star):
         super().__init__(context)
         self.config = config
         self._group_name_job_id: str | None = None
-        self._castle_swap_service = CastleSwapService()
         self._image_generation_service = ImageGenerationService(self.context, config)
+        self._castle_swap_service = CastleSwapService(self._image_generation_service)
 
     async def initialize(self):
         """注册每日零点更新群名的任务。"""
@@ -62,11 +62,7 @@ class MisakaBotPlugin(Star):
 
     @filter.command("王车易位")
     async def castle_swap(self, event: AstrMessageEvent):
-        async for result in self._castle_swap_service.handle(
-            event,
-            self.context,
-            self.config,
-        ):
+        async for result in self._castle_swap_service.handle(event):
             yield result
 
     @filter.llm_tool(name="misaka_generate_image")
