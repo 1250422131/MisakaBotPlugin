@@ -17,6 +17,7 @@ TEXT_TO_IMAGE_PROVIDER_ID_KEY = "text_to_image_provider_id"
 DEFAULT_SIZE = "1024x1024"
 DEFAULT_QUALITY = "high"
 DEFAULT_OUTPUT_FORMAT = "png"
+IMAGE_GENERATION_TIMEOUT_SECONDS = 120
 MAX_OUTPUT_EDGE = 2048
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=300)
 
@@ -135,6 +136,7 @@ class TextToImageGenerator:
                 quality=quality,
                 output_format=output_format,
                 n=count,
+                timeout=IMAGE_GENERATION_TIMEOUT_SECONDS,
             )
         else:
             response = await self._generate_from_image(
@@ -202,6 +204,7 @@ class TextToImageGenerator:
             quality=quality,
             output_format=output_format,
             n=count,
+            timeout=IMAGE_GENERATION_TIMEOUT_SECONDS,
         )
 
     @staticmethod

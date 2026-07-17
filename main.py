@@ -25,6 +25,7 @@ class MisakaBotPlugin(Star):
         self.config = config
         self._group_name_job_id: str | None = None
         self._castle_swap_service = CastleSwapService()
+        self._image_generation_tasks: set[asyncio.Task] = set()
 
     async def initialize(self):
         """注册每日零点更新群名的任务。"""
@@ -47,6 +48,12 @@ class MisakaBotPlugin(Star):
         if self._group_name_job_id:
             await self.context.cron_manager.delete_job(self._group_name_job_id)
             self._group_name_job_id = None
+        tasks = list(self._image_generation_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._image_generation_tasks.clear()
 
     async def _refresh_group_name_at_midnight(self):
         await refresh_group_name_at_midnight(self.context)
@@ -81,6 +88,24 @@ class MisakaBotPlugin(Star):
         """
         try:
             await event.send(MessageChain([Plain("正在努力绘制...")]))
+            task = asyncio.create_task(
+                self._generate_image_in_background(event, prompt)
+            )
+            self._image_generation_tasks.add(task)
+            task.add_done_callback(self._image_generation_tasks.discard)
+            return "图片正在生成，完成后会自动发送给用户。"
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"图片生成 Tool 调用失败: {exc}")
+            return "图片生成失败，请检查文生图 AI 服务商配置后重试。"
+
+    async def _generate_image_in_background(
+        self,
+        event: AstrMessageEvent,
+        prompt: str,
+    ) -> None:
+        try:
             result = await TextToImageGenerator.from_config(
                 self.context,
                 self.config,
@@ -93,12 +118,16 @@ class MisakaBotPlugin(Star):
             else:
                 image = Image.fromURL(result.source)
             await event.send(MessageChain([image]))
-            return "图片已生成并发送给用户。"
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(f"图片生成 Tool 调用失败: {exc}")
-            return "图片生成失败，请检查文生图 AI 服务商配置后重试。"
+            logger.warning(f"后台图片生成失败: {exc}")
+            try:
+                await event.send(
+                    MessageChain([Plain("图片生成失败，请检查文生图 AI 服务商后重试。")])
+                )
+            except Exception as send_exc:
+                logger.warning(f"后台图片生成失败消息发送失败: {send_exc}")
 
     @filter.command("群规")
     async def send_group_rules(self, event: AstrMessageEvent):
