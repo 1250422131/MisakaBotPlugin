@@ -6,10 +6,16 @@ import aiohttp
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
+from astrbot.api import AstrBotConfig, logger
 
 from .extend.group_name import build_group_name
 from .extend.kotlin_celebration import generate_kotlin_celebration
+from .extend.text_to_image import (
+    REQUEST_TIMEOUT,
+    TextToImageGenerator,
+    load_input_image,
+    output_size_for_images,
+)
 
 GROUP_RULES_URL = "https://misakamoe.com/keys"
 TARGET_GROUP_ID = 812128563
@@ -17,8 +23,9 @@ DAILY_GROUP_NAME_JOB = "misaka_bot_daily_group_name"
 
 
 class MisakaBotPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
+        self.config = config
         self._group_name_job_id: str | None = None
 
     async def initialize(self):
@@ -112,6 +119,67 @@ class MisakaBotPlugin(Star):
             [
                 Reply(id=event.message_obj.message_id),
                 Image.fromURL(result_url),
+            ]
+        )
+
+    @filter.command("王车易位")
+    async def castle_swap(self, event: AstrMessageEvent):
+        """将两张图片的主体融合为一个主体。"""
+        prompt = """将两张参考图中的主体融合为一个单独主体，统一最终图像的风格、服装、配饰和画面表现。
+最终画面只能出现一个主体，不要并排、拼贴、分屏、镜像、双重主体或多张脸。
+若主体是人物，必须保留第二张参考图的人脸作为最终人脸，并自然融合第一张图的风格与主体特征。"""
+        image_sources = [
+            str(getattr(component, "url", None) or getattr(component, "file", None))
+            for component in event.get_messages()
+            if isinstance(component, Image)
+            and (getattr(component, "url", None) or getattr(component, "file", None))
+        ]
+        if len(image_sources) != 2:
+            yield event.plain_result("请携带两张图片后再使用王车易位。")
+            return
+
+        try:
+            yield event.chain_result(
+                [
+                    Reply(id=event.message_obj.message_id),
+                    Plain("正在融合两张图片，请稍候..."),
+                ]
+            )
+            generator = TextToImageGenerator.from_config(self.config)
+            async with aiohttp.ClientSession(timeout=REQUEST_TIMEOUT) as session:
+                input_images = [
+                    await load_input_image(session, source) for source in image_sources
+                ]
+            result = await generator.generate(
+                prompt,
+                size=output_size_for_images(input_images),
+                input_images=input_images,
+            )
+            if result.source.startswith("base64://"):
+                raise ValueError("文生图接口未返回可发送的图片 URL")
+        except asyncio.TimeoutError:
+            logger.warning("王车易位请求超时")
+            yield event.chain_result(
+                [
+                    Reply(id=event.message_obj.message_id),
+                    Plain("王车易位生成超时，请稍后再试。"),
+                ]
+            )
+            return
+        except (aiohttp.ClientError, ValueError, OSError) as exc:
+            logger.warning(f"王车易位生成失败: {exc}")
+            yield event.chain_result(
+                [
+                    Reply(id=event.message_obj.message_id),
+                    Plain("王车易位生成失败，请检查文生图配置后重试。"),
+                ]
+            )
+            return
+
+        yield event.chain_result(
+            [
+                Reply(id=event.message_obj.message_id),
+                Image.fromURL(result.source),
             ]
         )
 

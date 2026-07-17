@@ -1,0 +1,14 @@
+{
+  "text_to_image_api_host": {
+    "type": "string",
+    "description": "文生图服务 Host",
+    "hint": "请输入服务 Host，例如 https://www.packyapi.com。",
+    "default": ""
+  },
+  "text_to_image_api_key": {
+    "type": "string",
+    "description": "文生图 API Key",
+    "hint": "请输入文生图接口的 API Key。",
+    "default": ""
+  }
+}
