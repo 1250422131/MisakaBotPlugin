@@ -13,12 +13,28 @@ TARGET_GROUP_ID = 812128563
 
 
 async def refresh_group_name_at_midnight(context: Context) -> None:
-    platform = context.get_platform("aiocqhttp")
-    if platform is None:
+    platforms = [
+        platform
+        for platform in context.platform_manager.get_insts()
+        if platform.meta().name == "aiocqhttp"
+    ]
+    if not platforms:
         logger.warning("未找到 aiocqhttp 平台，无法更新群名")
         return
 
-    await set_group_name(platform.get_client())
+    last_error: Exception | None = None
+    for platform in platforms:
+        try:
+            await set_group_name(platform.get_client())
+        except Exception as exc:
+            last_error = exc
+            logger.debug(
+                f"aiocqhttp 平台 {platform.meta().id} 更新群名失败: {exc}"
+            )
+            continue
+        return
+
+    raise RuntimeError("所有 aiocqhttp 平台均未能修改目标群群名") from last_error
 
 
 async def handle_refresh_group_name(event: AstrMessageEvent):
@@ -98,5 +114,5 @@ async def set_group_name(bot: Any, self_id: str | None = None) -> str:
         return group_name
 
     raise RuntimeError(
-        f"没有已连接且可管理群 {TARGET_GROUP_ID} 的 OneBot 机器人"
+        f"所有候选 OneBot 连接均未能修改群 {TARGET_GROUP_ID} 的群名"
     ) from last_error
