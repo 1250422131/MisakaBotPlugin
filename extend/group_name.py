@@ -109,6 +109,13 @@ def build_group_name(today: date | None = None) -> str:
     return f"{name} {label}{emojis[1]}" if label else name
 
 
+def get_special_day_label(today: date | None = None) -> str:
+    """返回当天节日或节气名称；普通日期返回空字符串。"""
+    today = today or datetime.now(SHANGHAI_TIMEZONE).date()
+    label, _ = _day_label_and_emojis(today)
+    return label
+
+
 def _day_label_and_emojis(today: date) -> tuple[str, tuple[str, str]]:
     solar = Solar.fromYmd(today.year, today.month, today.day)
     lunar = solar.getLunar()

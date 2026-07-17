@@ -29,7 +29,7 @@ class MisakaBotPlugin(Star):
         self._markdown_t2i_tasks: set[asyncio.Task[None]] = set()
 
     async def initialize(self):
-        """注册每日零点更新群名的任务。"""
+        """注册每日零点更新群名和特殊头像的任务。"""
         existing_jobs = await self.context.cron_manager.list_jobs(job_type="basic")
         for job in existing_jobs:
             if job.name == DAILY_GROUP_NAME_JOB:
@@ -39,7 +39,7 @@ class MisakaBotPlugin(Star):
             name=DAILY_GROUP_NAME_JOB,
             cron_expression="0 0 * * *",
             handler=self._refresh_group_name_at_midnight,
-            description="每日零点更新萌新交流社群名",
+            description="每日零点更新萌新交流社群名和特殊头像",
             timezone="Asia/Shanghai",
         )
         self._group_name_job_id = job.job_id
@@ -58,11 +58,11 @@ class MisakaBotPlugin(Star):
         self._markdown_t2i_tasks.clear()
 
     async def _refresh_group_name_at_midnight(self):
-        await refresh_group_name_at_midnight(self.context)
+        await refresh_group_name_at_midnight(self.context, self.config)
 
     @filter.command("改朝换代")
     async def refresh_group_name(self, event: AstrMessageEvent):
-        async for result in handle_refresh_group_name(event):
+        async for result in handle_refresh_group_name(event, self.context, self.config):
             yield result
 
     @filter.command("为Kotlin庆生")

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any
 
 from astrbot.api import logger
@@ -5,6 +6,7 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import At, Plain
 from astrbot.api.star import Context
 
+from .group_avatar import refresh_group_avatar
 from .group_name import build_group_name
 
 
@@ -12,7 +14,10 @@ GROUP_RULES_URL = "https://misakamoe.com/keys"
 TARGET_GROUP_ID = 812128563
 
 
-async def refresh_group_name_at_midnight(context: Context) -> None:
+async def refresh_group_name_at_midnight(
+    context: Context,
+    config: Mapping[str, object],
+) -> None:
     platforms = [
         platform
         for platform in context.platform_manager.get_insts()
@@ -32,12 +37,24 @@ async def refresh_group_name_at_midnight(context: Context) -> None:
                 f"aiocqhttp 平台 {platform.meta().id} 更新群名失败: {exc}"
             )
             continue
+        try:
+            await refresh_group_avatar(
+                context,
+                config,
+                platform.get_client(),
+            )
+        except Exception as exc:
+            logger.warning(f"群头像更新失败: {exc}")
         return
 
     raise RuntimeError("所有 aiocqhttp 平台均未能修改目标群群名") from last_error
 
 
-async def handle_refresh_group_name(event: AstrMessageEvent):
+async def handle_refresh_group_name(
+    event: AstrMessageEvent,
+    context: Context,
+    config: Mapping[str, object],
+):
     if str(event.get_group_id()) != str(TARGET_GROUP_ID):
         yield event.plain_result("该指令只能在本群使用。")
         return
@@ -51,6 +68,24 @@ async def handle_refresh_group_name(event: AstrMessageEvent):
     except Exception as exc:
         logger.exception(f"手动更新群名失败: {exc}")
         yield event.plain_result("群名更新失败，请确认机器人具备群管理权限。")
+        return
+
+    try:
+        avatar_label = await refresh_group_avatar(
+            context,
+            config,
+            event.bot,
+            self_id=str(event_self_id) if event_self_id else None,
+        )
+    except Exception as exc:
+        logger.warning(f"手动更新群头像失败: {exc}")
+        yield event.plain_result(f"群名已更新为：{group_name}；群头像更新失败。")
+        return
+
+    if avatar_label:
+        yield event.plain_result(
+            f"群名已更新为：{group_name}；群头像已更新为 {avatar_label} 主题。"
+        )
         return
 
     yield event.plain_result(f"群名已更新为：{group_name}")
