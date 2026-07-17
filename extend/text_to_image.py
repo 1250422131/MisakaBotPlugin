@@ -5,17 +5,15 @@ import mimetypes
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 import aiohttp
 from PIL import Image as PillowImage
+from astrbot.api.star import Context
 
 
-TEXT_TO_IMAGE_API_HOST_KEY = "text_to_image_api_host"
-TEXT_TO_IMAGE_API_KEY_KEY = "text_to_image_api_key"
-GENERATIONS_PATH = "/v1/images/generations"
-EDITS_PATH = "/v1/images/edits"
-DEFAULT_MODEL = "gpt-image-2"
+TEXT_TO_IMAGE_PROVIDER_ID_KEY = "text_to_image_provider_id"
 DEFAULT_SIZE = "1024x1024"
 DEFAULT_QUALITY = "high"
 DEFAULT_OUTPUT_FORMAT = "png"
@@ -94,26 +92,25 @@ async def load_input_image(
 
 
 class TextToImageGenerator:
-    """调用 Packy 兼容的文生图和图文生图接口。"""
+    """复用 AstrBot 已配置的 OpenAI 兼容服务商生成图片。"""
 
-    def __init__(self, api_host: str, api_key: str):
-        self._api_host = self._validate_api_host(api_host)
-        self._api_key = self._validate_api_key(api_key)
+    def __init__(self, context: Context, provider_id: str):
+        self._context = context
+        self._provider_id = provider_id.strip()
 
     @classmethod
-    def from_config(cls, config: Mapping[str, object]) -> "TextToImageGenerator":
-        api_host = config.get(TEXT_TO_IMAGE_API_HOST_KEY, "")
-        api_key = config.get(TEXT_TO_IMAGE_API_KEY_KEY, "")
-        return cls(
-            api_host=api_host if isinstance(api_host, str) else "",
-            api_key=api_key if isinstance(api_key, str) else "",
-        )
+    def from_config(
+        cls,
+        context: Context,
+        config: Mapping[str, object],
+    ) -> "TextToImageGenerator":
+        provider_id = config.get(TEXT_TO_IMAGE_PROVIDER_ID_KEY, "")
+        return cls(context, provider_id if isinstance(provider_id, str) else "")
 
     async def generate(
         self,
         prompt: str,
         *,
-        model: str = DEFAULT_MODEL,
         size: str = DEFAULT_SIZE,
         quality: str = DEFAULT_QUALITY,
         output_format: str = DEFAULT_OUTPUT_FORMAT,
@@ -126,112 +123,99 @@ class TextToImageGenerator:
         if count < 1:
             raise ValueError("文生图数量必须大于 0")
 
-        payload: dict[str, str | int] = {
-            "model": model,
-            "prompt": normalized_prompt,
-            "size": size,
-            "quality": quality,
-            "output_format": output_format,
-            "response_format": "url",
-            "n": count,
-        }
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Accept": "*/*",
-        }
+        provider = self._get_provider()
+        client = self._get_image_client(provider)
+        model = self._get_model(provider)
 
-        async with aiohttp.ClientSession(timeout=REQUEST_TIMEOUT) as session:
-            if input_images is None:
-                response_data = await self._generate_from_text(session, headers, payload)
-            else:
-                response_data = await self._generate_from_image(
-                    session,
-                    headers,
-                    payload,
-                    input_images,
-                )
+        if input_images is None:
+            response = await client.images.generate(
+                model=model,
+                prompt=normalized_prompt,
+                size=size,
+                quality=quality,
+                output_format=output_format,
+                n=count,
+            )
+        else:
+            response = await self._generate_from_image(
+                client,
+                model,
+                normalized_prompt,
+                size,
+                quality,
+                output_format,
+                count,
+                input_images,
+            )
 
-        return self._parse_response(response_data)
+        return self._parse_response(response)
 
-    @staticmethod
-    def _validate_api_host(api_host: str) -> str:
-        normalized_host = api_host.strip().rstrip("/")
-        parsed_host = urlparse(normalized_host)
-        if (
-            parsed_host.scheme not in {"http", "https"}
-            or not parsed_host.netloc
-            or parsed_host.path
-            or parsed_host.params
-            or parsed_host.query
-            or parsed_host.fragment
-        ):
-            raise ValueError("请先在插件配置中填写有效的文生图服务 Host")
-        return normalized_host
+    def _get_provider(self) -> Any:
+        if not self._provider_id:
+            raise ValueError("请先在插件配置中选择文生图 AI 服务商")
+
+        provider = self._context.get_provider_by_id(provider_id=self._provider_id)
+        if provider is None:
+            raise ValueError(f"未找到文生图 AI 服务商: {self._provider_id}")
+        return provider
 
     @staticmethod
-    def _validate_api_key(api_key: str) -> str:
-        normalized_key = api_key.strip()
-        if not normalized_key:
-            raise ValueError("请先在插件配置中填写文生图 API Key")
-        return normalized_key
+    def _get_image_client(provider: Any) -> Any:
+        client = getattr(provider, "client", None)
+        images = getattr(client, "images", None)
+        if images is None or not callable(getattr(images, "generate", None)):
+            raise ValueError(
+                "所选服务商不支持 OpenAI Images 接口，请选择支持图片生成的 OpenAI 兼容服务商"
+            )
+        return client
 
-    async def _generate_from_text(
-        self,
-        session: aiohttp.ClientSession,
-        headers: dict[str, str],
-        payload: dict[str, str | int],
-    ) -> object:
-        async with session.post(
-            f"{self._api_host}{GENERATIONS_PATH}",
-            json=payload,
-            headers=headers,
-        ) as response:
-            response.raise_for_status()
-            return await response.json(content_type=None)
+    @staticmethod
+    def _get_model(provider: Any) -> str:
+        get_model = getattr(provider, "get_model", None)
+        model = get_model() if callable(get_model) else ""
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("所选服务商未配置图片生成模型")
+        return model
 
+    @staticmethod
     async def _generate_from_image(
-        self,
-        session: aiohttp.ClientSession,
-        headers: dict[str, str],
-        payload: dict[str, str | int],
+        client: Any,
+        model: str,
+        prompt: str,
+        size: str,
+        quality: str,
+        output_format: str,
+        count: int,
         input_images: list[InputImage],
     ) -> object:
         if not input_images:
             raise ValueError("图文生图的输入图片不能为空")
 
-        form = aiohttp.FormData()
-        for key, value in payload.items():
-            form.add_field(key, str(value))
-        for image in input_images:
-            form.add_field(
-                "image",
-                image.data,
-                filename=image.filename,
-                content_type=image.content_type,
-            )
-        async with session.post(
-            f"{self._api_host}{EDITS_PATH}",
-            data=form,
-            headers=headers,
-        ) as response:
-            response.raise_for_status()
-            return await response.json(content_type=None)
+        image_files = [
+            (image.filename, image.data, image.content_type) for image in input_images
+        ]
+        return await client.images.edit(
+            model=model,
+            prompt=prompt,
+            image=image_files,
+            size=size,
+            quality=quality,
+            output_format=output_format,
+            n=count,
+        )
 
     @staticmethod
     def _parse_response(response_data: object) -> GeneratedImage:
-        if not isinstance(response_data, dict):
-            raise ValueError("文生图接口返回格式错误")
-
-        images = response_data.get("data")
-        if not isinstance(images, list) or not images or not isinstance(images[0], dict):
+        images = getattr(response_data, "data", None)
+        if not isinstance(images, list) or not images:
             raise ValueError("文生图接口未返回图片")
 
         image = images[0]
-        image_url = image.get("url")
+        image_url = getattr(image, "url", None)
         if isinstance(image_url, str) and image_url:
             return GeneratedImage(source=image_url)
 
-        b64_json = image.get("b64_json")
+        b64_json = getattr(image, "b64_json", None)
         if isinstance(b64_json, str) and b64_json:
             try:
                 base64.b64decode(b64_json, validate=True)

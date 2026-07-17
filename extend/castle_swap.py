@@ -6,6 +6,7 @@ import aiohttp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Image, Plain, Reply
+from astrbot.api.star import Context
 
 from .text_to_image import (
     REQUEST_TIMEOUT,
@@ -25,6 +26,7 @@ class CastleSwapService:
     async def handle(
         self,
         event: AstrMessageEvent,
+        context: Context,
         config: Mapping[str, object],
     ):
         prompt = """将两张参考图中的主体融合为一个单独主体，统一最终图像的风格、服装、配饰和画面表现。
@@ -52,7 +54,7 @@ class CastleSwapService:
                     Plain("正在融合两张图片，请稍候..."),
                 ]
             )
-            generator = TextToImageGenerator.from_config(config)
+            generator = TextToImageGenerator.from_config(context, config)
             async with aiohttp.ClientSession(timeout=REQUEST_TIMEOUT) as session:
                 input_images = [
                     await load_input_image(session, source) for source in image_sources
@@ -84,7 +86,7 @@ class CastleSwapService:
             yield event.chain_result(
                 [
                     Reply(id=event.message_obj.message_id),
-                    Plain("王车易位生成失败，请检查文生图配置后重试。"),
+                    Plain("王车易位生成失败，请检查所选文生图 AI 服务商后重试。"),
                 ]
             )
             return

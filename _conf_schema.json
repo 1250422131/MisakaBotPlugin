@@ -1,14 +1,9 @@
 {
-  "text_to_image_api_host": {
+  "text_to_image_provider_id": {
     "type": "string",
-    "description": "文生图服务 Host",
-    "hint": "请输入服务 Host，例如 https://www.packyapi.com。",
-    "default": ""
-  },
-  "text_to_image_api_key": {
-    "type": "string",
-    "description": "文生图 API Key",
-    "hint": "请输入文生图接口的 API Key。",
+    "description": "文生图 AI 服务商",
+    "_special": "select_provider",
+    "hint": "选择已在 AstrBot 中配置、且当前模型支持 OpenAI Images 文生图/图生图接口的服务商。",
     "default": ""
   }
 }

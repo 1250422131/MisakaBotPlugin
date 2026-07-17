@@ -59,7 +59,11 @@ class MisakaBotPlugin(Star):
 
     @filter.command("王车易位")
     async def castle_swap(self, event: AstrMessageEvent):
-        async for result in self._castle_swap_service.handle(event, self.config):
+        async for result in self._castle_swap_service.handle(
+            event,
+            self.context,
+            self.config,
+        ):
             yield result
 
     @filter.command("群规")
