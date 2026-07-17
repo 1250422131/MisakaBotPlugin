@@ -2,7 +2,7 @@ import asyncio
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
-from astrbot.api.message_components import Image
+from astrbot.api.message_components import Image, Plain
 from astrbot.api.star import Context, Star
 
 from .extend.castle_swap import CastleSwapService
@@ -80,6 +80,7 @@ class MisakaBotPlugin(Star):
             prompt(string): 用于生成图片的完整中文或英文描述，需包含主体、场景、风格和用户提出的其他要求。
         """
         try:
+            await event.send(MessageChain([Plain("正在努力绘制...")]))
             result = await TextToImageGenerator.from_config(
                 self.context,
                 self.config,
