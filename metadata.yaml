@@ -3,7 +3,7 @@ display_name: MisakaBotPlugin # 用于展示的名字，可以是方便人类阅
 desc: AstrBot 插件示例。 # 插件简短描述
 version: v1.0.1 # 插件版本号。格式：v1.1.1 或者 v1.1
 author: 萌新交流社 # 作者
-repo: https://github.com/1250422131 # 插件的仓库地址
+repo: https://github.com/1250422131/MisakaBotPlugin # 插件的仓库地址
 support_platform: # 插件支持的平台
   - aiocqhttp
 
