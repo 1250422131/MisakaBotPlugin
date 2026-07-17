@@ -1,5 +1,8 @@
-from astrbot.api import AstrBotConfig
-from astrbot.api.event import AstrMessageEvent, filter
+import asyncio
+
+from astrbot.api import AstrBotConfig, logger
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api.message_components import Image, Plain, Reply
 from astrbot.api.star import Context, Star
 
 from .extend.castle_swap import CastleSwapService
@@ -11,7 +14,6 @@ from .extend.group_management import (
 )
 from .extend.image_generation import ImageGenerationService
 from .extend.kotlin_celebration import handle_kotlin_celebration
-from .extend.markdown_to_image import handle_render_markdown
 
 
 DAILY_GROUP_NAME_JOB = "misaka_bot_daily_group_name"
@@ -24,6 +26,7 @@ class MisakaBotPlugin(Star):
         self._group_name_job_id: str | None = None
         self._image_generation_service = ImageGenerationService(self.context, config)
         self._castle_swap_service = CastleSwapService(self._image_generation_service)
+        self._markdown_t2i_tasks: set[asyncio.Task[None]] = set()
 
     async def initialize(self):
         """注册每日零点更新群名的任务。"""
@@ -47,6 +50,12 @@ class MisakaBotPlugin(Star):
             await self.context.cron_manager.delete_job(self._group_name_job_id)
             self._group_name_job_id = None
         await self._image_generation_service.terminate()
+        tasks = list(self._markdown_t2i_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._markdown_t2i_tasks.clear()
 
     async def _refresh_group_name_at_midnight(self):
         await refresh_group_name_at_midnight(self.context)
@@ -90,7 +99,50 @@ class MisakaBotPlugin(Star):
         Args:
             markdown_content(string): 要发送给用户的完整 Markdown 内容，保留标题、表格、列表、代码块等 Markdown 结构。
         """
-        return await handle_render_markdown(event, markdown_content)
+        try:
+            await event.send(
+                MessageChain(
+                    [Reply(id=event.message_obj.message_id), Plain("正在转换 Markdown 图片...")]
+                )
+            )
+            task = asyncio.create_task(
+                self._render_markdown_with_astrbot_t2i(event, markdown_content)
+            )
+            self._markdown_t2i_tasks.add(task)
+            task.add_done_callback(self._markdown_t2i_tasks.discard)
+            event.stop_event()
+            return "Markdown 正在转换为图片并发送。不要再输出原始 Markdown 或重复内容。"
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"Markdown T2I 任务启动失败: {exc}")
+            return "Markdown 转图片任务启动失败，请稍后重试。"
+
+    async def _render_markdown_with_astrbot_t2i(
+        self,
+        event: AstrMessageEvent,
+        markdown_content: str,
+    ) -> None:
+        try:
+            source = await self.text_to_image(markdown_content, return_url=True)
+            if not source:
+                raise ValueError("AstrBot T2I 未返回图片")
+            image = (
+                Image.fromURL(source)
+                if source.startswith(("http://", "https://"))
+                else Image.fromFileSystem(source)
+            )
+            await event.send(
+                MessageChain([Reply(id=event.message_obj.message_id), image])
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"Markdown T2I 渲染失败: {exc}")
+            try:
+                await event.send(MessageChain([Plain(f"Markdown 转图片失败：{exc}")]))
+            except Exception as send_exc:
+                logger.warning(f"Markdown T2I 失败消息发送失败: {send_exc}")
 
     @filter.command("群规")
     async def send_group_rules(self, event: AstrMessageEvent):
