@@ -1,24 +1,17 @@
-import asyncio
-from typing import Any
-
-import aiohttp
-
+from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import At, Image, Plain, Reply
-from astrbot.api.star import Context, Star, register
-from astrbot.api import AstrBotConfig, logger
+from astrbot.api.star import Context, Star
 
-from .extend.group_name import build_group_name
-from .extend.kotlin_celebration import generate_kotlin_celebration
-from .extend.text_to_image import (
-    REQUEST_TIMEOUT,
-    TextToImageGenerator,
-    load_input_image,
-    output_size_for_images,
+from .extend.castle_swap import CastleSwapService
+from .extend.group_management import (
+    handle_new_member_notice,
+    handle_refresh_group_name,
+    handle_send_group_rules,
+    refresh_group_name_at_midnight,
 )
+from .extend.kotlin_celebration import handle_kotlin_celebration
 
-GROUP_RULES_URL = "https://misakamoe.com/keys"
-TARGET_GROUP_ID = 812128563
+
 DAILY_GROUP_NAME_JOB = "misaka_bot_daily_group_name"
 
 
@@ -27,6 +20,7 @@ class MisakaBotPlugin(Star):
         super().__init__(context)
         self.config = config
         self._group_name_job_id: str | None = None
+        self._castle_swap_service = CastleSwapService()
 
     async def initialize(self):
         """注册每日零点更新群名的任务。"""
@@ -51,157 +45,29 @@ class MisakaBotPlugin(Star):
             self._group_name_job_id = None
 
     async def _refresh_group_name_at_midnight(self):
-        platform = self.context.get_platform("aiocqhttp")
-        if platform is None:
-            logger.warning("未找到 aiocqhttp 平台，无法更新群名")
-            return
-
-        bot = platform.get_client()
-        await self._set_group_name(bot)
-
-    async def _set_group_name(self, bot: Any) -> str:
-        group_name = build_group_name()
-        await bot.call_action(
-            "set_group_name",
-            group_id=TARGET_GROUP_ID,
-            group_name=group_name,
-        )
-        logger.info(f"已更新群 {TARGET_GROUP_ID} 名称为：{group_name}")
-        return group_name
+        await refresh_group_name_at_midnight(self.context)
 
     @filter.command("改朝换代")
     async def refresh_group_name(self, event: AstrMessageEvent):
-        """立即按当天节日或节气更新本群群名。"""
-        if str(event.get_group_id()) != str(TARGET_GROUP_ID):
-            yield event.plain_result("该指令只能在本群使用。")
-            return
-
-        try:
-            group_name = await self._set_group_name(event.bot)
-        except Exception as exc:
-            logger.exception(f"手动更新群名失败: {exc}")
-            yield event.plain_result("群名更新失败，请确认机器人具备群管理权限。")
-            return
-
-        yield event.plain_result(f"群名已更新为：{group_name}")
+        async for result in handle_refresh_group_name(event):
+            yield result
 
     @filter.command("为Kotlin庆生")
     async def celebrate_kotlin(self, event: AstrMessageEvent):
-        """使用消息图片或 QQ 头像生成 Kotlin 庆生贺卡。"""
-        try:
-            yield event.chain_result(
-                [
-                    Reply(id=event.message_obj.message_id),
-                    Plain("开始生成庆生图片，请稍候..."),
-                ]
-            )
-            result_url = await generate_kotlin_celebration(event)
-        except asyncio.TimeoutError:
-            logger.warning("Kotlin 庆生请求超时")
-            yield event.chain_result(
-                [
-                    Reply(id=event.message_obj.message_id),
-                    Plain("Kotlin 庆生图片生成超时，请稍后再试。"),
-                ]
-            )
-            return
-        except (aiohttp.ClientError, ValueError, OSError) as exc:
-            logger.warning(f"Kotlin 庆生图片生成失败: {exc}")
-            yield event.chain_result(
-                [
-                    Reply(id=event.message_obj.message_id),
-                    Plain("Kotlin 庆生图片生成失败，请稍后再试。"),
-                ]
-            )
-            return
-
-        yield event.chain_result(
-            [
-                Reply(id=event.message_obj.message_id),
-                Image.fromURL(result_url),
-            ]
-        )
+        async for result in handle_kotlin_celebration(event):
+            yield result
 
     @filter.command("王车易位")
     async def castle_swap(self, event: AstrMessageEvent):
-        """将两张图片的主体融合为一个主体。"""
-        prompt = """将两张参考图中的主体融合为一个单独主体，统一最终图像的风格、服装、配饰和画面表现。
-最终画面只能出现一个主体，不要并排、拼贴、分屏、镜像、双重主体或多张脸。
-若主体是人物，必须保留第二张参考图的人脸作为最终人脸，并自然融合第一张图的风格与主体特征。"""
-        image_sources = [
-            str(getattr(component, "url", None) or getattr(component, "file", None))
-            for component in event.get_messages()
-            if isinstance(component, Image)
-            and (getattr(component, "url", None) or getattr(component, "file", None))
-        ]
-        if len(image_sources) != 2:
-            yield event.plain_result("请携带两张图片后再使用王车易位。")
-            return
-
-        try:
-            yield event.chain_result(
-                [
-                    Reply(id=event.message_obj.message_id),
-                    Plain("正在融合两张图片，请稍候..."),
-                ]
-            )
-            generator = TextToImageGenerator.from_config(self.config)
-            async with aiohttp.ClientSession(timeout=REQUEST_TIMEOUT) as session:
-                input_images = [
-                    await load_input_image(session, source) for source in image_sources
-                ]
-            result = await generator.generate(
-                prompt,
-                size=output_size_for_images(input_images),
-                input_images=input_images,
-            )
-            if result.source.startswith("base64://"):
-                raise ValueError("文生图接口未返回可发送的图片 URL")
-        except asyncio.TimeoutError:
-            logger.warning("王车易位请求超时")
-            yield event.chain_result(
-                [
-                    Reply(id=event.message_obj.message_id),
-                    Plain("王车易位生成超时，请稍后再试。"),
-                ]
-            )
-            return
-        except (aiohttp.ClientError, ValueError, OSError) as exc:
-            logger.warning(f"王车易位生成失败: {exc}")
-            yield event.chain_result(
-                [
-                    Reply(id=event.message_obj.message_id),
-                    Plain("王车易位生成失败，请检查文生图配置后重试。"),
-                ]
-            )
-            return
-
-        yield event.chain_result(
-            [
-                Reply(id=event.message_obj.message_id),
-                Image.fromURL(result.source),
-            ]
-        )
+        async for result in self._castle_swap_service.handle(event, self.config):
+            yield result
 
     @filter.command("群规")
     async def send_group_rules(self, event: AstrMessageEvent):
-        """发送本群群规链接。"""
-        yield event.plain_result(f"本群群规：{GROUP_RULES_URL}")
+        async for result in handle_send_group_rules(event):
+            yield result
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def remind_new_member_to_read_rules(self, event: AstrMessageEvent):
-        """在 OneBot 新成员入群后提醒其阅读群规。"""
-        raw_event = event.message_obj.raw_message
-        if (
-            raw_event.get("post_type") != "notice"
-            or raw_event.get("notice_type") != "group_increase"
-            or str(raw_event.get("user_id")) == str(raw_event.get("self_id"))
-        ):
-            return
-
-        yield event.chain_result(
-            [
-                At(qq=event.get_sender_id()),
-                Plain(f"请务必阅读本群群规：{GROUP_RULES_URL}"),
-            ]
-        )
+        async for result in handle_new_member_notice(event):
+            yield result

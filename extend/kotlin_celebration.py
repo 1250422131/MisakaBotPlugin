@@ -6,8 +6,9 @@ from urllib.parse import unquote, urlparse
 
 import aiohttp
 
+from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
-from astrbot.api.message_components import Image
+from astrbot.api.message_components import Image, Plain, Reply
 
 
 INPAINT_URL = "https://postcards-service.labs.jb.gg/api/v1/inpaint"
@@ -26,6 +27,42 @@ async def generate_kotlin_celebration(event: AstrMessageEvent) -> str:
         image_data, content_type, filename = await _load_image(session, source)
         task_id = await _submit_image(session, image_data, content_type, filename)
         return await _wait_for_result(session, task_id)
+
+
+async def handle_kotlin_celebration(event: AstrMessageEvent):
+    try:
+        yield event.chain_result(
+            [
+                Reply(id=event.message_obj.message_id),
+                Plain("开始生成庆生图片，请稍候..."),
+            ]
+        )
+        result_url = await generate_kotlin_celebration(event)
+    except asyncio.TimeoutError:
+        logger.warning("Kotlin 庆生请求超时")
+        yield event.chain_result(
+            [
+                Reply(id=event.message_obj.message_id),
+                Plain("Kotlin 庆生图片生成超时，请稍后再试。"),
+            ]
+        )
+        return
+    except (aiohttp.ClientError, ValueError, OSError) as exc:
+        logger.warning(f"Kotlin 庆生图片生成失败: {exc}")
+        yield event.chain_result(
+            [
+                Reply(id=event.message_obj.message_id),
+                Plain("Kotlin 庆生图片生成失败，请稍后再试。"),
+            ]
+        )
+        return
+
+    yield event.chain_result(
+        [
+            Reply(id=event.message_obj.message_id),
+            Image.fromURL(result_url),
+        ]
+    )
 
 
 def _find_message_image(event: AstrMessageEvent) -> str | None:
