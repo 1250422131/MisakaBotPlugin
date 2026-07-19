@@ -1,4 +1,10 @@
 {
+  "wps_web_cookie": {
+    "type": "text",
+    "description": "WPS网页Cookie",
+    "hint": "用于导出本群群规图片。填写浏览器请求头中的完整 Cookie 值，不要填写 Cookie: 前缀。Cookie 失效后需要重新填写。",
+    "default": ""
+  },
   "text_to_image_provider_id": {
     "type": "string",
     "description": "文生图 AI 服务商",

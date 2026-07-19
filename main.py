@@ -9,9 +9,11 @@ from markdown import markdown
 
 from .extend.castle_swap import CastleSwapService
 from .extend.group_management import (
+    GroupRulesImageService,
     handle_new_member_notice,
     handle_refresh_group_name,
     handle_send_group_rules,
+    handle_update_group_rules_image,
     refresh_group_name_at_midnight,
 )
 from .extend.image_generation import ImageGenerationService
@@ -82,6 +84,7 @@ class MisakaBotPlugin(Star):
         self._group_name_job_id: str | None = None
         self._image_generation_service = ImageGenerationService(self.context, config)
         self._castle_swap_service = CastleSwapService(self._image_generation_service)
+        self._group_rules_image_service = GroupRulesImageService(self.name, config)
         self._markdown_t2i_tasks: set[asyncio.Task[None]] = set()
 
     async def initialize(self):
@@ -206,10 +209,18 @@ class MisakaBotPlugin(Star):
 
     @filter.command("群规")
     async def send_group_rules(self, event: AstrMessageEvent):
-        async for result in handle_send_group_rules(event):
+        async for result in handle_send_group_rules(event, self._group_rules_image_service):
+            yield result
+
+    @filter.command("更新群规图片")
+    async def update_group_rules_image(self, event: AstrMessageEvent):
+        async for result in handle_update_group_rules_image(
+            event,
+            self._group_rules_image_service,
+        ):
             yield result
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def remind_new_member_to_read_rules(self, event: AstrMessageEvent):
-        async for result in handle_new_member_notice(event):
+        async for result in handle_new_member_notice(event, self._group_rules_image_service):
             yield result

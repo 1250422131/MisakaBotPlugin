@@ -1,17 +1,176 @@
+import asyncio
+import base64
+import binascii
+import io
+import uuid
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
+import aiohttp
+from PIL import Image as PillowImage
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
-from astrbot.api.message_components import At, Plain
+from astrbot.api.message_components import At, Image, Plain
 from astrbot.api.star import Context
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .group_avatar import refresh_group_avatar
 from .group_name import build_group_name
 
 
 GROUP_RULES_URL = "https://misakamoe.com/keys"
+GROUP_RULES_FILE_ID = "ctRRdywKqu2F"
+GROUP_RULES_EXPORT_URL = "https://vas-api.kdocs.cn/export/api/v1/image/export"
+GROUP_RULES_IMAGE_FILENAME = "group_rules.jpg"
 TARGET_GROUP_ID = 812128563
+WPS_WEB_COOKIE_KEY = "wps_web_cookie"
+WPS_EXPORT_TIMEOUT = aiohttp.ClientTimeout(total=90)
+
+
+class GroupRulesImageService:
+    """导出、压缩并管理本地群规图片缓存。"""
+
+    def __init__(self, plugin_name: str, config: Mapping[str, object]):
+        self._config = config
+        self._image_path = (
+            Path(get_astrbot_data_path())
+            / "plugin_data"
+            / plugin_name
+            / GROUP_RULES_IMAGE_FILENAME
+        )
+        self._update_lock = asyncio.Lock()
+
+    def cached_image_path(self) -> Path | None:
+        return self._image_path if self._image_path.is_file() else None
+
+    async def update_image(self) -> Path:
+        cookie = _get_wps_cookie(self._config)
+        if not cookie:
+            raise ValueError("请先配置 WPS网页Cookie")
+
+        async with self._update_lock:
+            image_data = await self._export_image(cookie)
+            await asyncio.to_thread(self._compress_image, image_data)
+            return self._image_path
+
+    async def _export_image(self, cookie: str) -> bytes:
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
+            "Cookie": cookie,
+            "Origin": "https://www.kdocs.cn",
+            "Referer": f"https://www.kdocs.cn/l/{GROUP_RULES_FILE_ID}",
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/138.0.0.0 Safari/537.36"
+            ),
+        }
+        payload = {
+            "format": "png",
+            "file_id": GROUP_RULES_FILE_ID,
+            "client_id": str(uuid.uuid4()),
+            "options": {
+                "dpi": 96,
+                "combine2_long_pic": True,
+                "water_mark": 0,
+                "xva": 0,
+            },
+        }
+
+        async with aiohttp.ClientSession(timeout=WPS_EXPORT_TIMEOUT) as session:
+            async with session.post(
+                GROUP_RULES_EXPORT_URL,
+                headers=headers,
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                if response.content_type.startswith("image/"):
+                    return await response.read()
+                response_data = await response.json(content_type=None)
+
+            image_source = _find_image_source(response_data)
+            if image_source is None:
+                raise ValueError("WPS 未返回可用的群规图片")
+            if image_source.startswith("data:image/"):
+                return _decode_data_url(image_source)
+
+            async with session.get(image_source, headers={"Cookie": cookie}) as response:
+                response.raise_for_status()
+                return await response.read()
+
+    def _compress_image(self, image_data: bytes) -> None:
+        self._image_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = self._image_path.with_suffix(".tmp")
+        try:
+            with PillowImage.open(io.BytesIO(image_data)) as source:
+                image = source.convert("RGB")
+                image.save(
+                    temporary_path,
+                    format="JPEG",
+                    quality=82,
+                    optimize=True,
+                    progressive=True,
+                )
+            temporary_path.replace(self._image_path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _get_wps_cookie(config: Mapping[str, object]) -> str:
+    value = config.get(WPS_WEB_COOKIE_KEY, "")
+    if not isinstance(value, str):
+        return ""
+    return value.removeprefix("Cookie:").replace("\n", "").strip()
+
+
+def _find_image_source(response_data: object) -> str | None:
+    if isinstance(response_data, str):
+        if response_data.startswith(("data:image/", "http://", "https://")):
+            return response_data
+        return None
+    if isinstance(response_data, list):
+        for value in response_data:
+            source = _find_image_source(value)
+            if source:
+                return source
+        return None
+    if not isinstance(response_data, dict):
+        return None
+
+    for key in (
+        "url",
+        "image_url",
+        "imageUrl",
+        "download_url",
+        "downloadUrl",
+        "file_url",
+        "fileUrl",
+        "path",
+        "src",
+        "img",
+    ):
+        value = response_data.get(key)
+        if isinstance(value, str) and value.startswith(
+            ("data:image/", "http://", "https://")
+        ):
+            return value
+    for key in ("data", "result", "image", "image_data"):
+        source = _find_image_source(response_data.get(key))
+        if source:
+            return source
+    return None
+
+
+def _decode_data_url(source: str) -> bytes:
+    _, separator, encoded = source.partition(",")
+    if not separator or not encoded:
+        raise ValueError("WPS 返回的图片数据无效")
+    try:
+        return base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("WPS 返回的图片数据无效") from exc
 
 
 async def refresh_group_name_at_midnight(
@@ -91,11 +250,42 @@ async def handle_refresh_group_name(
     yield event.plain_result(f"群名已更新为：{group_name}")
 
 
-async def handle_send_group_rules(event: AstrMessageEvent):
+async def handle_update_group_rules_image(
+    event: AstrMessageEvent,
+    image_service: GroupRulesImageService,
+):
+    yield event.plain_result("正在更新群规图片，请稍候...")
+    try:
+        image_path = await image_service.update_image()
+    except (aiohttp.ClientError, OSError, ValueError) as exc:
+        logger.warning(f"更新群规图片失败: {exc}")
+        yield event.plain_result("群规图片更新失败，请检查 WPS网页Cookie 配置后重试。")
+        return
+    except Exception as exc:
+        logger.exception(f"更新群规图片失败: {exc}")
+        yield event.plain_result("群规图片更新失败，请稍后重试。")
+        return
+
+    yield event.chain_result(
+        [Plain("群规图片已更新完成。"), Image.fromFileSystem(str(image_path))]
+    )
+
+
+async def handle_send_group_rules(
+    event: AstrMessageEvent,
+    image_service: GroupRulesImageService,
+):
+    image_path = image_service.cached_image_path()
+    if image_path:
+        yield event.chain_result([Image.fromFileSystem(str(image_path))])
+        return
     yield event.plain_result(f"本群群规：{GROUP_RULES_URL}")
 
 
-async def handle_new_member_notice(event: AstrMessageEvent):
+async def handle_new_member_notice(
+    event: AstrMessageEvent,
+    image_service: GroupRulesImageService,
+):
     raw_event = event.message_obj.raw_message
     if (
         raw_event.get("post_type") != "notice"
@@ -104,12 +294,15 @@ async def handle_new_member_notice(event: AstrMessageEvent):
     ):
         return
 
-    yield event.chain_result(
-        [
-            At(qq=event.get_sender_id()),
-            Plain(f"请务必阅读本群群规：{GROUP_RULES_URL}"),
-        ]
-    )
+    image_path = image_service.cached_image_path()
+    components: list[object] = [At(qq=event.get_sender_id())]
+    if image_path:
+        components.extend(
+            [Plain("请务必阅读本群群规："), Image.fromFileSystem(str(image_path))]
+        )
+    else:
+        components.append(Plain(f"请务必阅读本群群规：{GROUP_RULES_URL}"))
+    yield event.chain_result(components)
 
 
 async def set_group_name(bot: Any, self_id: str | None = None) -> str:
