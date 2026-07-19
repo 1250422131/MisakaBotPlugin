@@ -2,7 +2,8 @@ import asyncio
 import base64
 import binascii
 import io
-import uuid
+import json
+import secrets
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -20,8 +21,8 @@ from .group_name import build_group_name
 
 
 GROUP_RULES_URL = "https://misakamoe.com/keys"
-GROUP_RULES_FILE_ID = "ctRRdywKqu2F"
-GROUP_RULES_EXPORT_URL = "https://vas-api.kdocs.cn/export/api/v1/image/export"
+GROUP_RULES_FILE_ID = "112312478065"
+GROUP_RULES_EXPORT_URL = "https://vas-api.kdocs.cn/export/api/v1/image/async/export"
 GROUP_RULES_IMAGE_FILENAME = "group_rules.jpg"
 TARGET_GROUP_ID = 812128563
 WPS_WEB_COOKIE_KEY = "wps_web_cookie"
@@ -61,6 +62,7 @@ class GroupRulesImageService:
             "Cookie": cookie,
             "Origin": "https://www.kdocs.cn",
             "Referer": f"https://www.kdocs.cn/l/{GROUP_RULES_FILE_ID}",
+            "X-Biz-Clients": "1",
             "User-Agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -70,13 +72,18 @@ class GroupRulesImageService:
         payload = {
             "format": "png",
             "file_id": GROUP_RULES_FILE_ID,
-            "client_id": str(uuid.uuid4()),
+            "client_id": secrets.token_hex(16),
             "options": {
                 "dpi": 96,
                 "combine2_long_pic": True,
-                "water_mark": 0,
-                "xva": 0,
+                "from_page": 1,
+                "to_page": 15,
             },
+            "file_base64": "",
+            "file_name": "",
+            "with_dw_event": True,
+            "action": "export",
+            "mask": "default",
         }
 
         async with aiohttp.ClientSession(timeout=WPS_EXPORT_TIMEOUT) as session:
@@ -88,7 +95,7 @@ class GroupRulesImageService:
                 response.raise_for_status()
                 if response.content_type.startswith("image/"):
                     return await response.read()
-                response_data = await response.json(content_type=None)
+                response_data = _parse_export_response(await response.text())
 
             image_source = _find_image_source(response_data)
             if image_source is None:
@@ -156,11 +163,27 @@ def _find_image_source(response_data: object) -> str | None:
             ("data:image/", "http://", "https://")
         ):
             return value
-    for key in ("data", "result", "image", "image_data"):
+    for key in ("data", "result", "image", "image_data", "img_list"):
         source = _find_image_source(response_data.get(key))
         if source:
             return source
     return None
+
+
+def _parse_export_response(response_text: str) -> object:
+    for line in response_text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        try:
+            response_data = json.loads(line.removeprefix("data:").strip())
+        except json.JSONDecodeError as exc:
+            raise ValueError("WPS 返回的导出结果无效") from exc
+        if not isinstance(response_data, dict):
+            raise ValueError("WPS 返回的导出结果无效")
+        if response_data.get("code") != "0":
+            raise ValueError(f"WPS 图片导出失败：{response_data.get('msg', '未知错误')}")
+        return response_data
+    raise ValueError("WPS 未返回导出结果")
 
 
 def _decode_data_url(source: str) -> bytes:
