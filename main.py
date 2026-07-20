@@ -156,6 +156,7 @@ class MisakaBotPlugin(Star):
             yield result
 
     @filter.command("同步WPS群规")
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def sync_wps_group_rules(self, event: AstrMessageEvent):
         async for result in handle_sync_wps_group_rules(
             event,
@@ -164,6 +165,7 @@ class MisakaBotPlugin(Star):
             yield result
 
     @filter.command("更新群规图片")
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def update_group_rules_image(self, event: AstrMessageEvent):
         async for result in handle_update_group_rules_image(
             event,

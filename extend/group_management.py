@@ -135,28 +135,27 @@ def _compress_image_data(image_data: bytes) -> bytes:
     except (OSError, UnidentifiedImageError) as exc:
         raise ValueError("附件不是有效图片") from exc
 
-    for _ in range(12):
-        for quality in (80, 70, 60, 50, 40, 30):
-            output = io.BytesIO()
-            image.save(
-                output,
-                format="JPEG",
-                quality=quality,
-                optimize=True,
-                progressive=True,
-            )
-            if output.tell() <= MAX_GROUP_RULES_IMAGE_SIZE:
-                return output.getvalue()
+    compressed_data = image_data
+    for attempt in range(3):
+        output = io.BytesIO()
+        image.save(
+            output,
+            format="JPEG",
+            quality=80 - attempt * 20,
+            optimize=True,
+            progressive=True,
+        )
+        compressed_data = output.getvalue()
+        if len(compressed_data) <= MAX_GROUP_RULES_IMAGE_SIZE:
+            return compressed_data
 
         width, height = image.size
-        if width == 1 and height == 1:
-            break
         image = image.resize(
             (max(1, round(width * 0.8)), max(1, round(height * 0.8))),
             PillowImage.Resampling.LANCZOS,
         )
 
-    raise ValueError("图片压缩后仍超过 4MB")
+    return compressed_data
 
 
 def _get_wps_cookie(config: Mapping[str, object]) -> str:
