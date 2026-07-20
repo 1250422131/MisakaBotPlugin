@@ -11,6 +11,7 @@ from urllib.parse import unquote, urlparse
 
 import aiohttp
 from PIL import Image as PillowImage
+from PIL import UnidentifiedImageError
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import At, Image, Plain, Reply
@@ -28,6 +29,7 @@ GROUP_RULES_IMAGE_FILENAME = "group_rules.jpg"
 TARGET_GROUP_ID = 812128563
 WPS_WEB_COOKIE_KEY = "wps_web_cookie"
 WPS_EXPORT_TIMEOUT = aiohttp.ClientTimeout(total=90)
+MAX_GROUP_RULES_IMAGE_SIZE = 4 * 1024 * 1024
 
 
 class GroupRulesImageService:
@@ -119,18 +121,42 @@ class GroupRulesImageService:
         self._image_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = self._image_path.with_suffix(".tmp")
         try:
-            with PillowImage.open(io.BytesIO(image_data)) as source:
-                image = source.convert("RGB")
-                image.save(
-                    temporary_path,
-                    format="JPEG",
-                    quality=82,
-                    optimize=True,
-                    progressive=True,
-                )
+            temporary_path.write_bytes(_compress_image_data(image_data))
             temporary_path.replace(self._image_path)
         finally:
             temporary_path.unlink(missing_ok=True)
+
+
+def _compress_image_data(image_data: bytes) -> bytes:
+    try:
+        with PillowImage.open(io.BytesIO(image_data)) as source:
+            source.load()
+            image = source.convert("RGB")
+    except (OSError, UnidentifiedImageError) as exc:
+        raise ValueError("附件不是有效图片") from exc
+
+    for _ in range(12):
+        for quality in (80, 70, 60, 50, 40, 30):
+            output = io.BytesIO()
+            image.save(
+                output,
+                format="JPEG",
+                quality=quality,
+                optimize=True,
+                progressive=True,
+            )
+            if output.tell() <= MAX_GROUP_RULES_IMAGE_SIZE:
+                return output.getvalue()
+
+        width, height = image.size
+        if width == 1 and height == 1:
+            break
+        image = image.resize(
+            (max(1, round(width * 0.8)), max(1, round(height * 0.8))),
+            PillowImage.Resampling.LANCZOS,
+        )
+
+    raise ValueError("图片压缩后仍超过 4MB")
 
 
 def _get_wps_cookie(config: Mapping[str, object]) -> str:
@@ -328,19 +354,25 @@ async def handle_update_group_rules_image(
 
 def _find_message_image(event: AstrMessageEvent) -> str | None:
     for component in event.get_messages():
-        if isinstance(component, Image):
-            source = getattr(component, "url", None) or getattr(component, "file", None)
+        if _is_image_or_file_component(component):
+            source = _component_source(component)
             if source:
                 return str(source)
         elif isinstance(component, Reply) and component.chain:
             for reply_component in component.chain:
-                if isinstance(reply_component, Image):
-                    source = getattr(reply_component, "url", None) or getattr(
-                        reply_component, "file", None
-                    )
+                if _is_image_or_file_component(reply_component):
+                    source = _component_source(reply_component)
                     if source:
                         return str(source)
     return None
+
+
+def _is_image_or_file_component(component: object) -> bool:
+    return isinstance(component, Image) or component.__class__.__name__ == "File"
+
+
+def _component_source(component: object) -> object | None:
+    return getattr(component, "url", None) or getattr(component, "file", None)
 
 
 async def _load_image_data(source: str) -> bytes:
