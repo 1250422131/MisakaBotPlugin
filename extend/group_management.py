@@ -7,12 +7,13 @@ import secrets
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import aiohttp
 from PIL import Image as PillowImage
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
-from astrbot.api.message_components import At, Image, Plain
+from astrbot.api.message_components import At, Image, Plain, Reply
 from astrbot.api.star import Context
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
@@ -52,8 +53,15 @@ class GroupRulesImageService:
 
         async with self._update_lock:
             image_data = await self._export_image(cookie)
-            await asyncio.to_thread(self._compress_image, image_data)
-            return self._image_path
+            return await self._save_image(image_data)
+
+    async def save_image(self, image_data: bytes) -> Path:
+        async with self._update_lock:
+            return await self._save_image(image_data)
+
+    async def _save_image(self, image_data: bytes) -> Path:
+        await asyncio.to_thread(self._compress_image, image_data)
+        return self._image_path
 
     async def _export_image(self, cookie: str) -> bytes:
         headers = {
@@ -273,25 +281,85 @@ async def handle_refresh_group_name(
     yield event.plain_result(f"群名已更新为：{group_name}")
 
 
+async def handle_sync_wps_group_rules(
+    event: AstrMessageEvent,
+    image_service: GroupRulesImageService,
+):
+    yield event.plain_result("正在同步 WPS 群规，请稍候...")
+    try:
+        image_path = await image_service.update_image()
+    except (aiohttp.ClientError, OSError, ValueError) as exc:
+        logger.warning(f"同步 WPS 群规失败: {exc}")
+        yield event.plain_result("WPS 群规同步失败，请检查 WPS网页Cookie 配置后重试。")
+        return
+    except Exception as exc:
+        logger.exception(f"同步 WPS 群规失败: {exc}")
+        yield event.plain_result("WPS 群规同步失败，请稍后重试。")
+        return
+
+    yield event.chain_result(
+        [Plain("WPS 群规已同步完成。"), Image.fromFileSystem(str(image_path))]
+    )
+
+
 async def handle_update_group_rules_image(
     event: AstrMessageEvent,
     image_service: GroupRulesImageService,
 ):
-    yield event.plain_result("正在更新群规图片，请稍候...")
+    image_source = _find_message_image(event)
+    if image_source is None:
+        yield event.plain_result("请在命令后附带图片，或回复一张图片后再发送该命令。")
+        return
+
     try:
-        image_path = await image_service.update_image()
+        image_data = await _load_image_data(image_source)
+        await image_service.save_image(image_data)
     except (aiohttp.ClientError, OSError, ValueError) as exc:
         logger.warning(f"更新群规图片失败: {exc}")
-        yield event.plain_result("群规图片更新失败，请检查 WPS网页Cookie 配置后重试。")
+        yield event.plain_result("群规图片更新失败，请确认图片可访问后重试。")
         return
     except Exception as exc:
         logger.exception(f"更新群规图片失败: {exc}")
         yield event.plain_result("群规图片更新失败，请稍后重试。")
         return
 
-    yield event.chain_result(
-        [Plain("群规图片已更新完成。"), Image.fromFileSystem(str(image_path))]
+    yield event.plain_result("群规图片已更新完成。")
+
+
+def _find_message_image(event: AstrMessageEvent) -> str | None:
+    for component in event.get_messages():
+        if isinstance(component, Image):
+            source = getattr(component, "url", None) or getattr(component, "file", None)
+            if source:
+                return str(source)
+        elif isinstance(component, Reply) and component.chain:
+            for reply_component in component.chain:
+                if isinstance(reply_component, Image):
+                    source = getattr(reply_component, "url", None) or getattr(
+                        reply_component, "file", None
+                    )
+                    if source:
+                        return str(source)
+    return None
+
+
+async def _load_image_data(source: str) -> bytes:
+    if source.startswith("base64://"):
+        try:
+            return base64.b64decode(source.removeprefix("base64://"), validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("图片数据无效") from exc
+
+    if source.startswith(("http://", "https://")):
+        async with aiohttp.ClientSession(timeout=WPS_EXPORT_TIMEOUT) as session:
+            async with session.get(source) as response:
+                response.raise_for_status()
+                return await response.read()
+
+    image_path = Path(
+        unquote(urlparse(source).path if source.startswith("file://") else source)
     )
+    return await asyncio.to_thread(image_path.read_bytes)
 
 
 async def handle_send_group_rules(
