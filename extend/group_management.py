@@ -136,7 +136,7 @@ def _compress_image_data(image_data: bytes) -> bytes:
         raise ValueError("附件不是有效图片") from exc
 
     compressed_data = image_data
-    for attempt in range(3):
+    for attempt in range(2):
         output = io.BytesIO()
         image.save(
             output,
