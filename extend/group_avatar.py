@@ -62,7 +62,12 @@ async def refresh_group_avatar(
         f"耗时 {monotonic() - save_started_at:.1f}s"
     )
     try:
-        await _set_group_avatar(bot, avatar_path, self_id=self_id)
+        await _set_group_avatar(
+            bot,
+            avatar_path,
+            fallback_url=image.source,
+            self_id=self_id,
+        )
     finally:
         avatar_path.unlink(missing_ok=True)
 
@@ -135,8 +140,15 @@ async def _set_group_avatar(
     bot: Any,
     avatar_path: Path,
     *,
+    fallback_url: str,
     self_id: str | None,
 ) -> None:
+    avatar_data = avatar_path.read_bytes()
+    avatar_base64 = "base64://" + base64.b64encode(avatar_data).decode("ascii")
+    upload_sources: list[tuple[str, str]] = [("Base64", avatar_base64)]
+    if fallback_url.startswith(("http://", "https://")):
+        upload_sources.append(("URL", fallback_url))
+
     connected_clients = getattr(bot, "_wsr_api_clients", {})
     connected_self_ids = (
         tuple(str(client_self_id) for client_self_id in connected_clients)
@@ -146,35 +158,40 @@ async def _set_group_avatar(
     candidate_self_ids: tuple[str | None, ...] = (
         (self_id,) if self_id else connected_self_ids or (None,)
     )
-    last_error: Exception | None = None
+    failures: list[str] = []
 
     for candidate_self_id in candidate_self_ids:
-        params: dict[str, Any] = {
-            "group_id": TARGET_GROUP_ID,
-            "file": str(avatar_path),
-        }
-        if candidate_self_id:
-            params["self_id"] = candidate_self_id
-        try:
-            logger.info(
-                "开始调用 OneBot set_group_portrait："
-                f"群 {TARGET_GROUP_ID}，机器人 {candidate_self_id or '未指定'}，"
-                f"文件 {avatar_path}，大小 {avatar_path.stat().st_size} bytes"
-            )
-            action_started_at = monotonic()
-            result = await bot.call_action("set_group_portrait", **params)
-            logger.info(
-                "OneBot set_group_portrait 调用成功："
-                f"群 {TARGET_GROUP_ID}，机器人 {candidate_self_id or '未指定'}，"
-                f"耗时 {monotonic() - action_started_at:.1f}s，返回值 {result!r}"
-            )
-            return
-        except Exception as exc:
-            last_error = exc
-            logger.warning(
-                f"机器人 {candidate_self_id or '未指定'} 更新群头像失败: {exc}"
-            )
+        for source_kind, file_source in upload_sources:
+            params: dict[str, Any] = {
+                "group_id": TARGET_GROUP_ID,
+                "file": file_source,
+            }
+            if candidate_self_id:
+                params["self_id"] = candidate_self_id
+            try:
+                logger.info(
+                    "开始调用 OneBot set_group_portrait："
+                    f"群 {TARGET_GROUP_ID}，机器人 {candidate_self_id or '未指定'}，"
+                    f"传输方式 {source_kind}，原始大小 {len(avatar_data)} bytes，"
+                    f"传输长度 {len(file_source)}"
+                )
+                action_started_at = monotonic()
+                result = await bot.call_action("set_group_portrait", **params)
+                logger.info(
+                    "OneBot set_group_portrait 调用成功："
+                    f"群 {TARGET_GROUP_ID}，机器人 {candidate_self_id or '未指定'}，"
+                    f"传输方式 {source_kind}，"
+                    f"耗时 {monotonic() - action_started_at:.1f}s，返回值 {result!r}"
+                )
+                return
+            except Exception as exc:
+                failure = (
+                    f"机器人 {candidate_self_id or '未指定'} 使用 {source_kind} 失败: {exc}"
+                )
+                failures.append(failure)
+                logger.warning(failure)
 
     raise RuntimeError(
-        f"所有候选 OneBot 连接均未能修改群 {TARGET_GROUP_ID} 的群头像"
-    ) from last_error
+        f"所有候选 OneBot 连接均未能修改群 {TARGET_GROUP_ID} 的群头像："
+        + "；".join(failures)
+    )

@@ -294,7 +294,7 @@ async def handle_refresh_group_name(
         )
     except Exception as exc:
         logger.warning(f"手动更新群头像失败: {exc}")
-        yield event.plain_result(f"群名已更新为：{group_name}；群头像更新失败。")
+        yield event.plain_result(f"群名已更新为：{group_name}；群头像更新失败：{exc}")
         return
 
     if avatar_label:
