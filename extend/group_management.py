@@ -274,6 +274,10 @@ async def handle_refresh_group_name(
         yield event.plain_result("该指令只能在本群使用。")
         return
 
+    yield event.chain_result(
+        [Reply(id=event.message_obj.message_id), Plain("正在更新群名和群头像，请稍候...")]
+    )
+
     event_self_id = getattr(event.message_obj, "self_id", None)
     try:
         group_name = await set_group_name(
@@ -286,7 +290,7 @@ async def handle_refresh_group_name(
         return
 
     try:
-        avatar_label = await refresh_group_avatar(
+        avatar = await refresh_group_avatar(
             context,
             config,
             event.bot,
@@ -297,9 +301,17 @@ async def handle_refresh_group_name(
         yield event.plain_result(f"群名已更新为：{group_name}；群头像更新失败：{exc}")
         return
 
-    if avatar_label:
-        yield event.plain_result(
-            f"群名已更新为：{group_name}；群头像已更新为 {avatar_label} 主题。"
+    if avatar:
+        image = (
+            Image.fromBase64(avatar.source.removeprefix("base64://"))
+            if avatar.source.startswith("base64://")
+            else Image.fromURL(avatar.source)
+        )
+        yield event.chain_result(
+            [
+                Plain(f"群名已更新为：{group_name}；群头像已更新为 {avatar.label} 主题。"),
+                image,
+            ]
         )
         return
 

@@ -1,6 +1,7 @@
 import base64
 import tempfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from time import monotonic
@@ -18,6 +19,14 @@ SPECIAL_GROUP_AVATAR_ENABLED_KEY = "special_group_avatar_enabled"
 TARGET_GROUP_ID = 812128563
 
 
+@dataclass(frozen=True)
+class RefreshedGroupAvatar:
+    """已成功更新到群头像的生成图片。"""
+
+    label: str
+    source: str
+
+
 async def refresh_group_avatar(
     context: Context,
     config: Mapping[str, object],
@@ -25,7 +34,7 @@ async def refresh_group_avatar(
     *,
     self_id: str | None = None,
     today: date | None = None,
-) -> str | None:
+) -> RefreshedGroupAvatar | None:
     """更新特殊日期头像，并在特殊日期结束后的次日恢复日常头像。"""
     if not _is_special_group_avatar_enabled(config):
         return None
@@ -72,7 +81,7 @@ async def refresh_group_avatar(
         avatar_path.unlink(missing_ok=True)
 
     logger.info(f"已将群 {TARGET_GROUP_ID} 头像更新为 {label} 主题 22、33 娘形象")
-    return label
+    return RefreshedGroupAvatar(label=label, source=image.source)
 
 
 def _is_special_group_avatar_enabled(config: Mapping[str, object]) -> bool:
