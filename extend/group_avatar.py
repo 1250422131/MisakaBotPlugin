@@ -3,6 +3,7 @@ import tempfile
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 import aiohttp
@@ -39,11 +40,27 @@ async def refresh_group_avatar(
     else:
         return None
 
+    logger.info(
+        f"开始生成群 {TARGET_GROUP_ID} 的 {label} 主题头像，尺寸为 1024x1024"
+    )
+    generation_started_at = monotonic()
     image = await TextToImageGenerator.from_config(context, config).generate(
         prompt,
         size="1024x1024",
     )
+    logger.info(
+        f"群 {TARGET_GROUP_ID} 的 {label} 主题头像文生图已返回，"
+        f"耗时 {monotonic() - generation_started_at:.1f}s，"
+        f"图片来源为 {_image_source_kind(image.source)}"
+    )
+
+    save_started_at = monotonic()
     avatar_path = await _save_generated_avatar(image.source)
+    logger.info(
+        f"群 {TARGET_GROUP_ID} 的 {label} 主题头像已保存至临时文件 {avatar_path}，"
+        f"大小 {avatar_path.stat().st_size} bytes，"
+        f"耗时 {monotonic() - save_started_at:.1f}s"
+    )
     try:
         await _set_group_avatar(bot, avatar_path, self_id=self_id)
     finally:
@@ -56,6 +73,14 @@ async def refresh_group_avatar(
 def _is_special_group_avatar_enabled(config: Mapping[str, object]) -> bool:
     value = config.get(SPECIAL_GROUP_AVATAR_ENABLED_KEY, True)
     return value if isinstance(value, bool) else True
+
+
+def _image_source_kind(source: str) -> str:
+    if source.startswith("base64://"):
+        return "Base64"
+    if source.startswith(("http://", "https://")):
+        return "URL"
+    return "本地路径"
 
 
 def _build_special_group_avatar_prompt(label: str) -> str:
@@ -131,11 +156,22 @@ async def _set_group_avatar(
         if candidate_self_id:
             params["self_id"] = candidate_self_id
         try:
-            await bot.call_action("set_group_portrait", **params)
+            logger.info(
+                "开始调用 OneBot set_group_portrait："
+                f"群 {TARGET_GROUP_ID}，机器人 {candidate_self_id or '未指定'}，"
+                f"文件 {avatar_path}，大小 {avatar_path.stat().st_size} bytes"
+            )
+            action_started_at = monotonic()
+            result = await bot.call_action("set_group_portrait", **params)
+            logger.info(
+                "OneBot set_group_portrait 调用成功："
+                f"群 {TARGET_GROUP_ID}，机器人 {candidate_self_id or '未指定'}，"
+                f"耗时 {monotonic() - action_started_at:.1f}s，返回值 {result!r}"
+            )
             return
         except Exception as exc:
             last_error = exc
-            logger.debug(
+            logger.warning(
                 f"机器人 {candidate_self_id or '未指定'} 更新群头像失败: {exc}"
             )
 
