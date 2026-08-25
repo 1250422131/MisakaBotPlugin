@@ -17,6 +17,7 @@ from .extend.group_management import (
 from .extend.image_generation import ImageGenerationService
 from .extend.kotlin_celebration import handle_kotlin_celebration
 from .extend.markdown_to_image import MARKDOWN_T2I_TEMPLATE, markdown_to_html
+from .extend.top_domain_moderation import recall_message_with_top_domain
 
 
 DAILY_GROUP_NAME_JOB = "misaka_bot_daily_group_name"
@@ -172,6 +173,10 @@ class MisakaBotPlugin(Star):
             self._group_rules_image_service,
         ):
             yield result
+
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    async def recall_top_domain_message(self, event: AstrMessageEvent):
+        await recall_message_with_top_domain(event)
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def remind_new_member_to_read_rules(self, event: AstrMessageEvent):

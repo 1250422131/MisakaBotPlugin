@@ -18,6 +18,13 @@ from .text_to_image import REQUEST_TIMEOUT, TextToImageGenerator
 SPECIAL_GROUP_AVATAR_ENABLED_KEY = "special_group_avatar_enabled"
 TARGET_GROUP_ID = 812128563
 
+NORMAL_AVATAR_SEASON_SCENES = {
+    "春季": "春日明亮的二次元社区花园，樱花与新绿花坛点缀石板小径、长椅和远处建筑",
+    "夏季": "夏日晴朗的二次元社区花园，浓绿树荫、繁盛花坛与清爽喷泉点缀石板小径、长椅和远处建筑",
+    "秋季": "秋日清朗的二次元社区花园，金黄与橙红树叶、菊花花坛点缀石板小径、长椅和远处建筑",
+    "冬季": "冬日明亮的二次元社区花园，薄雪、常青植物与温暖窗灯点缀石板小径、长椅和远处建筑",
+}
+
 
 @dataclass(frozen=True)
 class RefreshedGroupAvatar:
@@ -45,7 +52,7 @@ async def refresh_group_avatar(
         prompt = _build_special_group_avatar_prompt(label)
     elif get_special_day_label(today - timedelta(days=1)):
         label = "日常"
-        prompt = _build_normal_group_avatar_prompt()
+        prompt = _build_normal_group_avatar_prompt(today)
     else:
         return None
 
@@ -108,15 +115,27 @@ Composition/framing: 严格正方形 1:1 构图，22 娘和 33 娘肩并肩站�
 Constraints: 只出现 22 娘和 33 娘两名角色；无文字、无 logo、无水印、无边框、无二维码、无其他人物；不要写实照片风格。"""
 
 
-def _build_normal_group_avatar_prompt() -> str:
-    return """Use case: illustration-story
+def _build_normal_group_avatar_prompt(today: date) -> str:
+    season = _normal_avatar_season(today)
+    scene = NORMAL_AVATAR_SEASON_SCENES[season]
+    return f"""Use case: illustration-story
 Asset type: QQ group avatar, square 1:1
-Primary request: 制作哔哩哔哩 22 娘和 33 娘一起出现的日常可爱群头像。两人必须清晰可辨、形象特征鲜明。
+Primary request: 制作哔哩哔哩 22 娘和 33 娘一起出现的{season}日常可爱群头像。两人必须清晰可辨、形象特征鲜明。
 Subject: 22 娘与 33 娘，日系二次元官方吉祥物风格，Q版大头身、友好笑容、蓝白黑主色服装和发饰，保留两人各自不同的发色、发型与服装辨识度。
-Scene/backdrop: 温暖明亮的二次元社区花园，能看到石板小径、长椅、花坛和远处建筑，作为清晰且完整的日常背景地点。
+Scene/backdrop: {scene}，作为清晰且完整的{season}日常背景地点。
 Style/medium: 精致清晰的日系 Q 版插画，适合缩小为群头像。
-Composition/framing: 严格正方形 1:1 构图，22 娘和 33 娘肩并肩站在画面中央，两人从头部至少完整显示到腿部，不能画成只有头肩的头像；人物姿势、背景地点和前景花草形成完整构图。
-Constraints: 只出现 22 娘和 33 娘两名角色；无节日、节气或季节性装饰；无文字、无 logo、无水印、无边框、无二维码、无其他人物；不要写实照片风格。"""
+Composition/framing: 严格正方形 1:1 构图，22 娘和 33 娘肩并肩站在画面中央，两人从头部至少完整显示到腿部，不能画成只有头肩的头像；人物姿势、背景地点和符合{season}的前景植物形成完整构图。
+Constraints: 只出现 22 娘和 33 娘两名角色；仅使用日常{season}环境元素，不要加入任何节日或节气专属符号；无文字、无 logo、无水印、无边框、无二维码、无其他人物；不要写实照片风格。"""
+
+
+def _normal_avatar_season(today: date) -> str:
+    if 3 <= today.month <= 5:
+        return "春季"
+    if 6 <= today.month <= 8:
+        return "夏季"
+    if 9 <= today.month <= 11:
+        return "秋季"
+    return "冬季"
 
 
 async def _save_generated_avatar(source: str) -> Path:
