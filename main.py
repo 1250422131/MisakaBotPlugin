@@ -4,6 +4,7 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Image, Plain, Reply
 from astrbot.api.star import Context, Star
+from .extend.blank_nickname_moderation import moderate_blank_nickname
 from .extend.castle_swap import CastleSwapService
 from .extend.group_management import (
     GroupRulesImageService,
@@ -25,6 +26,7 @@ class MisakaBotPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
+        self._blank_nickname_lock = asyncio.Lock()
         self._group_name_job_id: str | None = None
         self._image_generation_service = ImageGenerationService(self.context, config)
         self._castle_swap_service = CastleSwapService(self._image_generation_service)
@@ -173,6 +175,11 @@ class MisakaBotPlugin(Star):
             self._group_rules_image_service,
         ):
             yield result
+
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    async def check_blank_nickname(self, event: AstrMessageEvent):
+        if self.config.get("blank_nickname_moderation_enabled", True):
+            await moderate_blank_nickname(event, self._blank_nickname_lock)
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def recall_top_domain_message(self, event: AstrMessageEvent):

@@ -17,5 +17,11 @@
     "description": "特殊节日和节气自动更换群头像",
     "hint": "开启后，执行改朝换代或每日零点更新时，会在节日、节气生成对应主题的 22、33 娘群头像，并在特殊日期结束后的次日恢复日常头像。",
     "default": true
+  },
+  "blank_nickname_moderation_enabled": {
+    "type": "bool",
+    "description": "检测并处理空白昵称",
+    "hint": "机器人是群主或群管理员时，自动修改空白昵称成员的群名片并 @ 提醒。",
+    "default": true
   }
 }
