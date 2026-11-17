@@ -422,9 +422,33 @@ async def handle_new_member_notice(
 ):
     raw_event = event.message_obj.raw_message
     if (
-        raw_event.get("post_type") != "notice"
+        not isinstance(raw_event, Mapping)
+        or raw_event.get("post_type") != "notice"
         or raw_event.get("notice_type") != "group_increase"
         or str(raw_event.get("user_id")) == str(raw_event.get("self_id"))
+    ):
+        return
+
+    group_id = event.get_group_id()
+    self_id = str(raw_event.get("self_id", ""))
+    if not (group_id and self_id):
+        return
+
+    try:
+        bot_member = await event.bot.call_action(
+            "get_group_member_info",
+            group_id=int(group_id),
+            user_id=int(self_id),
+            self_id=self_id,
+            no_cache=True,
+        )
+    except Exception as exc:
+        logger.warning(f"查询入群提醒所需的机器人群权限失败，group_id={group_id}: {exc}")
+        return
+
+    if not isinstance(bot_member, Mapping) or bot_member.get("role") not in (
+        "owner",
+        "admin",
     ):
         return
 
